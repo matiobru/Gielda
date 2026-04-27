@@ -77,15 +77,16 @@ def get_avwap(df):
     except: return None
 
 # --- POBIERANIE DANYCH ---
-# --- POBIERANIE DANYCH ---
 @st.cache_data(ttl=3600)
 def fetch_data(tickers):
-    t_str = " ".join(tickers)
-    # Zgodnie z nowymi wymogami Yahoo - usuwamy własną sesję i pozwalamy YF działać domyślnie
+    # KULOODPORNY FILTR: Wyłapujemy i usuwamy z listy wszelkie puste wartości (None)
+    czyste_tickery = [str(t).strip() for t in tickers if t is not None and str(t).strip() != "" and str(t).strip().lower() != "none"]
+    t_str = " ".join(czyste_tickery)
+    
+    # Pobieramy dane (zgodnie z nowymi wymogami Yahoo - bez ręcznej sesji)
     d1d = yf.download(t_str, period="1y", interval="1d", group_by="ticker", progress=False)
     d1h = yf.download(t_str, period="1mo", interval="1h", group_by="ticker", progress=False)
     return d1d, d1h
-
 
 def get_live_info(ticker):
     try:
