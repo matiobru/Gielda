@@ -118,8 +118,10 @@ nasdaq_top = [
 ]
 
 db_df = get_db()
-twoje_tickery = db_df['Symbol'].tolist() if not db_df.empty else []
+# WYKIDAJŁA BAZY DANYCH: Czyści wszystko co wychodzi z UGREENA
+twoje_tickery = [str(t).upper().strip() for t in db_df['Symbol'].tolist() if t is not None and str(t).strip() != "" and str(t).strip().lower() != "none"]
 all_tickers = list(set(nasdaq_top + twoje_tickery + ['QQQ']))
+all_tickers = [t for t in all_tickers if t] # Ubezpieczenie końcowe
 
 if all_tickers:
     st.write(f"🔥 *Inicjalizacja silnika... Analizuję {len(all_tickers)} akcji (Pełny skan algorytmiczny).*")
