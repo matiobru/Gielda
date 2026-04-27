@@ -24,8 +24,13 @@ def get_db():
     conn = sqlite3.connect(DB_FILE)
     df = pd.read_sql_query("SELECT * FROM portfel", conn)
     conn.close()
+    
+    # --- ZABÓJCA DUCHÓW (Automatyczne czyszczenie bazy) ---
+    df = df.dropna(subset=['Symbol']) # Usuwa twarde błędy
+    df = df[df['Symbol'].astype(str).str.strip() != ''] # Usuwa puste spacje
+    df = df[df['Symbol'].astype(str).str.lower() != 'none'] # Usuwa napis "None"
     return df
-
+    
 def save_db(df):
     conn = sqlite3.connect(DB_FILE)
     df.to_sql('portfel', conn, if_exists='replace', index=False)
@@ -248,9 +253,11 @@ if all_tickers:
         skan_df = res_df[res_df['Sygnały'] != "Brak"] if tylko_syg else res_df
         st.dataframe(skan_df.sort_values(by="Wystrzał 5D", ascending=False), use_container_width=True)
 
-    with t3:
+        with t3:
         st.header("Interaktywne Wykresy (150 Dni)")
-        wybrany = st.selectbox("Wybierz spółkę:", sorted([t for t in all_tickers if t != 'QQQ']))
+        # Pancerne filtrowanie przed sortowaniem
+        czyste_do_wykresu = [str(t).upper() for t in all_tickers if t is not None and str(t).strip().lower() not in ['', 'none', 'qqq']]
+        wybrany = st.selectbox("Wybierz spółkę:", sorted(czyste_do_wykresu))
         if wybrany:
             chart_df = d1d[wybrany].dropna().tail(150)
             fig = go.Figure()
