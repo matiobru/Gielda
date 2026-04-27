@@ -1,0 +1,12 @@
+version: '3.8'
+services:
+  kombinat-app:
+    image: python:3.10-slim
+    container_name: kombinat_gieldowy
+    working_dir: /app
+    volumes:
+      - .:/app
+    ports:
+      - "8501:8501"
+    command: /bin/bash -c "pip install --no-cache-dir -r requirements.txt && streamlit run app.py --server.port=8501 --server.address=0.0.0.0"
+    restart: unless-stopped
