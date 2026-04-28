@@ -2,55 +2,84 @@ import streamlit as st
 import pandas as pd
 import yfinance as yf
 import ta
-import sqlite3
+import gspread
+from google.oauth2.service_account import Credentials
 import requests
 import datetime
 import plotly.graph_objects as go
 import google.generativeai as genai
 
 # --- KONFIGURACJA STRONY ---
-st.set_page_config(page_title="Kombinat Giełdowy ULTIMATE", layout="wide", page_icon="🚀")
+st.set_page_config(page_title="Kombinat Giełdowy CLOUD", layout="wide", page_icon="🚀")
+st.markdown("<style> .reportview-container { background: #0e1117; } </style>", unsafe_allow_html=True)
 
-# --- LOKALNA BAZA DANYCH (UGREEN) ---
-DB_FILE = 'portfel_ultimate.db'
+# --- POŁĄCZENIE Z GOOGLE SHEETS (NIEŚMIERTELNA BAZA) ---
+@st.cache_resource
+def get_gspread_client():
+    scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+    creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scope)
+    return gspread.authorize(creds)
 
-def init_db():
-    conn = sqlite3.connect(DB_FILE)
-    conn.cursor().execute('CREATE TABLE IF NOT EXISTS portfel (Symbol TEXT PRIMARY KEY, Cena_Kupna REAL)')
-    conn.commit()
-    conn.close()
+def get_sheet_data(sheet_name):
+    client = get_gspread_client()
+    sh = client.open("Kombinat_DB")
+    worksheet = sh.worksheet(sheet_name)
+    dane = worksheet.get_all_records()
+    return pd.DataFrame(dane) if dane else pd.DataFrame(), worksheet
 
-def get_db():
-    conn = sqlite3.connect(DB_FILE)
-    df = pd.read_sql_query("SELECT * FROM portfel", conn)
-    conn.close()
+def save_to_sheet(sheet_name, df):
+    client = get_gspread_client()
+    sh = client.open("Kombinat_DB")
+    worksheet = sh.worksheet(sheet_name)
+    worksheet.clear()
+    worksheet.update([df.columns.values.tolist()] + df.values.tolist())
+
+# --- FUNKCJE USTAWIEŃ (Pamięć Kluczy) ---
+def get_setting(key_name):
+    try:
+        df, _ = get_sheet_data("Ustawienia")
+        if not df.empty and 'Klucz' in df.columns:
+            res = df[df['Klucz'] == key_name]['Wartosc']
+            return res.values[0] if not res.empty else ""
+    except: return ""
+    return ""
+
+def save_setting(key_name, value):
+    df, _ = get_sheet_data("Ustawienia")
+    if df.empty:
+        df = pd.DataFrame(columns=["Klucz", "Wartosc"])
     
-    # --- ZABÓJCA DUCHÓW (Automatyczne czyszczenie bazy) ---
-    df = df.dropna(subset=['Symbol']) # Usuwa twarde błędy
-    df = df[df['Symbol'].astype(str).str.strip() != ''] # Usuwa puste spacje
-    df = df[df['Symbol'].astype(str).str.lower() != 'none'] # Usuwa napis "None"
-    return df
-    
-def save_db(df):
-    conn = sqlite3.connect(DB_FILE)
-    df.to_sql('portfel', conn, if_exists='replace', index=False)
-    conn.commit()
-    conn.close()
+    new_setting = pd.DataFrame([{"Klucz": key_name, "Wartosc": value}])
+    if key_name in df['Klucz'].values:
+        df.loc[df['Klucz'] == key_name, 'Wartosc'] = value
+    else:
+        df = pd.concat([df, new_setting], ignore_index=True)
+    save_to_sheet("Ustawienia", df)
 
-init_db()
+# --- PANEL BOCZNY (TELEGRAM, AI, WATCHLISTA) ---
+st.sidebar.header("🔑 Sztuczna Inteligencja")
+saved_key = get_setting("gemini_api")
+gemini_api_key = st.sidebar.text_input("Gemini API Key", value=saved_key, type="password")
 
-# --- PANEL BOCZNY (TELEGRAM, AI, DODAWANIE AKCJI) ---
-st.sidebar.header("🔑 AI & Powiadomienia")
-gemini_api_key = st.sidebar.text_input("Gemini API Key", type="password")
+if gemini_api_key and gemini_api_key != saved_key:
+    save_setting("gemini_api", gemini_api_key)
+    st.sidebar.success("Klucz bezpiecznie zapisany w chmurze!")
+
+st.sidebar.header("📱 Telegram Alerty")
 tg_token = st.sidebar.text_input("Telegram Bot Token", type="password")
 tg_chat_id = st.sidebar.text_input("Telegram Chat ID", type="password")
 
-st.sidebar.header("⚙️ Watchlista")
-nowy_ticker = st.sidebar.text_input("Dodaj spółkę (np. UBER):").upper()
-if st.sidebar.button("Dodaj do Systemu"):
-    db = get_db()
-    if nowy_ticker and nowy_ticker not in db['Symbol'].values:
-        save_db(pd.concat([db, pd.DataFrame({'Symbol':[nowy_ticker], 'Cena_Kupna':[0.0]})], ignore_index=True))
+st.sidebar.header("⚙️ Dodaj Spółkę")
+nowy_ticker = st.sidebar.text_input("Symbol (np. PLTR):").upper()
+if st.sidebar.button("Dodaj do Portfela"):
+    df_portfel, _ = get_sheet_data("Portfel")
+    if df_portfel.empty:
+        df_portfel = pd.DataFrame(columns=["Symbol", "Cena_Kupna"])
+        
+    if nowy_ticker and nowy_ticker not in df_portfel['Symbol'].values:
+        new_row = pd.DataFrame([{"Symbol": nowy_ticker, "Cena_Kupna": 0.0}])
+        df_portfel = pd.concat([df_portfel, new_row], ignore_index=True)
+        save_to_sheet("Portfel", df_portfel)
         st.sidebar.success(f"Dodano {nowy_ticker}")
         st.rerun()
 
@@ -60,7 +89,7 @@ def wyslij_telegram(wiadomosc):
         try: requests.post(url, json={"chat_id": tg_chat_id, "text": wiadomosc, "parse_mode": "Markdown"})
         except: pass
 
-# --- ZAAWANSOWANA MATEMATYKA ---
+# --- ZAAWANSOWANA MATEMATYKA (Silnik Analityczny) ---
 def find_patterns(df):
     if len(df) < 5: return "Brak"
     c, p = df.iloc[-1], df.iloc[-2]
@@ -84,11 +113,10 @@ def get_avwap(df):
 # --- POBIERANIE DANYCH ---
 @st.cache_data(ttl=3600)
 def fetch_data(tickers):
-    # KULOODPORNY FILTR: Wyłapujemy i usuwamy z listy wszelkie puste wartości (None)
+    # Kuloodporny filtr pustych wartości
     czyste_tickery = [str(t).strip() for t in tickers if t is not None and str(t).strip() != "" and str(t).strip().lower() != "none"]
     t_str = " ".join(czyste_tickery)
     
-    # Pobieramy dane (zgodnie z nowymi wymogami Yahoo - bez ręcznej sesji)
     d1d = yf.download(t_str, period="1y", interval="1d", group_by="ticker", progress=False)
     d1h = yf.download(t_str, period="1mo", interval="1h", group_by="ticker", progress=False)
     return d1d, d1h
@@ -108,7 +136,7 @@ def get_earnings(ticker):
             return f"Za {dni} dni"
     except: return "Brak"
 
-# --- PEŁNA LISTA NASDAQ 100 + GIGANCI ---
+# --- LISTA NASDAQ 100 ---
 nasdaq_top = [
     'QQQ', 'AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'GOOGL', 'GOOG', 'TSLA', 'AVGO', 'PEP',
     'COST', 'LIN', 'AMD', 'NFLX', 'QCOM', 'TMUS', 'INTC', 'TXN', 'AMAT', 'HON', 'AMGN', 
@@ -122,11 +150,16 @@ nasdaq_top = [
     'COIN', 'HOOD', 'ARM', 'SNOW', 'MRVL', 'APP', 'CIEN'
 ]
 
-db_df = get_db()
-# WYKIDAJŁA BAZY DANYCH: Czyści wszystko co wychodzi z UGREENA
-twoje_tickery = [str(t).upper().strip() for t in db_df['Symbol'].tolist() if t is not None and str(t).strip() != "" and str(t).strip().lower() != "none"]
+# --- GŁÓWNY SILNIK ---
+try:
+    df_portfel, _ = get_sheet_data("Portfel")
+    twoje_tickery = [str(t).upper().strip() for t in df_portfel['Symbol'].tolist() if t is not None and str(t).strip() != "" and str(t).strip().lower() != "none"] if not df_portfel.empty else []
+except Exception as e:
+    st.error("Błąd połączenia z Google Sheets. Sprawdź plik JSON i sekcję st.secrets!")
+    st.stop()
+
 all_tickers = list(set(nasdaq_top + twoje_tickery + ['QQQ']))
-all_tickers = [t for t in all_tickers if t] # Ubezpieczenie końcowe
+all_tickers = [t for t in all_tickers if t]
 
 if all_tickers:
     st.write(f"🔥 *Inicjalizacja silnika... Analizuję {len(all_tickers)} akcji (Pełny skan algorytmiczny).*")
@@ -165,19 +198,18 @@ if all_tickers:
             bb = ta.volatility.BollingerBands(df['Close'], 20, 2)
             bbh, bbl = bb.bollinger_hband().iloc[-1], bb.bollinger_lband().iloc[-1]
             
-            # WOLUMEN (RVOL & OBV)
+            # WOLUMEN
             v_today = df['Volume'].iloc[-1]
             v_avg = df['Volume'].rolling(20).mean().iloc[-1]
             rvol = v_today / v_avg if v_avg > 0 else 0
             obv = ta.volume.on_balance_volume(df['Close'], df['Volume'])
             obv_sma = ta.trend.sma_indicator(obv, 10).iloc[-1]
             
-            # ZWROTY I SIŁA
+            # ZWROTY I GEOMETRIA
             ret_5d = df['Close'].pct_change(periods=5).iloc[-1]
             ret_10d = df['Close'].pct_change(periods=10).iloc[-1]
             rs_vs_qqq = (ret_10d - qqq_ret_10d) * 100
             
-            # GEOMETRIA (FIBO, AVWAP, DOŁKI)
             hi_52, lo_52 = df['High'].tail(252).max(), df['Low'].tail(252).min()
             f38 = hi_52 - (hi_52 - lo_52) * 0.382
             f50 = hi_52 - (hi_52 - lo_52) * 0.500
@@ -188,10 +220,8 @@ if all_tickers:
             p_low, d_low = df.loc[idx_low, 'Low'], idx_low.strftime('%Y-%m-%d')
             wzrost_dolek = ((c - p_low) / p_low) * 100
             
-            # STOP LOSS
             sl = max(avwap * 0.98 if avwap else 0, c - (atr * 1.5), f50)
             
-            # TAGI ALGORITMICZNE
             tagi = []
             if c > ema10 and ret_5d > 0.07 and rvol > 1.2: tagi.append("🚀 RAKIETA")
             if stoch_k > stoch_d and stoch_k < 80: tagi.append("🎯 STOCH CROSS")
@@ -216,36 +246,41 @@ if all_tickers:
     res_df = pd.DataFrame(wyniki)
 
     # --- UI ZAKŁADKI ---
-    t1, t2, t3, t4 = st.tabs(["🛡️ Mój Portfel (Zarządzanie)", "🌐 Master Screener", "📈 Wykresy Pro", "🧠 AI Dyrektor Finansowy"])
+    t1, t2, t3, t4 = st.tabs(["🛡️ Mój Portfel", "🌐 Master Screener", "📈 Wykresy Pro", "🧠 AI Dyrektor"])
 
     with t1:
         st.header("Centrum Dowodzenia Portfelem")
-        st.write("Podwójne kliknięcie w `Cena_Kupna` zapisuje dane bezpośrednio do bazy UGREEN SQLite.")
+        st.write("Podwójne kliknięcie w `Cena_Kupna` pozwala edytować pozycje (zapis w Google Sheets).")
         
-        edit_db = st.data_editor(db_df, num_rows="dynamic", use_container_width=True)
-        if not edit_db.equals(db_df): save_db(edit_db); st.rerun()
-        
-        m = pd.merge(edit_db, res_df, on="Symbol", how="inner")
-        alerty = []
-        
-        if not m.empty:
-            with st.spinner("Pobieram dane Pre-Market i Radar Wyników dla Twoich akcji..."):
-                m['Pre-Market'] = m['Symbol'].apply(get_live_info)
-                m['Radar Wyników'] = m['Symbol'].apply(get_earnings)
+        if not df_portfel.empty:
+            edit_db = st.data_editor(df_portfel, num_rows="dynamic", use_container_width=True, key="portfolio_editor")
+            if not edit_db.equals(df_portfel): 
+                save_to_sheet("Portfel", edit_db)
+                st.rerun()
             
-            m['Zysk %'] = ((m['Cena'] - m['Cena_Kupna']) / m['Cena_Kupna'] * 100).apply(lambda x: f"{x:+.2f}%")
-            m['Status EMA10'] = m.apply(lambda row: "🟢 Trzymaj" if row['Cena'] > row['EMA10'] else "🔴 Zagrożenie", axis=1)
+            m = pd.merge(edit_db, res_df, on="Symbol", how="inner")
+            alerty = []
             
-            for index, row in m.iterrows():
-                if "Zagrożenie" in row['Status EMA10']: alerty.append(f"🔴 {row['Symbol']}: Cena spadła poniżej EMA10!")
-                if "⚠️" in str(row['Radar Wyników']): alerty.append(f"{row['Radar Wyników']} do raportu dla {row['Symbol']}!")
+            if not m.empty:
+                with st.spinner("Pobieram dane Pre-Market i Radar Wyników..."):
+                    m['Pre-Market'] = m['Symbol'].apply(get_live_info)
+                    m['Radar Wyników'] = m['Symbol'].apply(get_earnings)
+                
+                m['Zysk %'] = ((m['Cena'] - m['Cena_Kupna']) / m['Cena_Kupna'] * 100).apply(lambda x: f"{x:+.2f}%")
+                m['Status EMA10'] = m.apply(lambda row: "🟢 Trzymaj" if row['Cena'] > row['EMA10'] else "🔴 Zagrożenie", axis=1)
+                
+                for index, row in m.iterrows():
+                    if "Zagrożenie" in row['Status EMA10']: alerty.append(f"🔴 {row['Symbol']}: Cena spadła poniżej EMA10!")
+                    if "⚠️" in str(row['Radar Wyników']): alerty.append(f"{row['Radar Wyników']} do raportu dla {row['Symbol']}!")
 
-            cols = ['Symbol', 'Zysk %', 'Cena', 'Pre-Market', 'Cena_Kupna', 'Status EMA10', 'Radar Wyników', 'Stop Loss', 'Wzór', 'RSI 1h', 'RSI 1d', 'AVWAP', 'Sygnały']
-            st.dataframe(m[cols], use_container_width=True)
-            
-            if st.button("🚨 Wyślij raport portfela na Telegram"):
-                msg = "*RAPORT PORTFELA UGREEN*\n\n" + "\n".join(alerty) if alerty else "🛡️ Portfel w pełni bezpieczny. Brak ostrzeżeń."
-                wyslij_telegram(msg)
+                cols = ['Symbol', 'Zysk %', 'Cena', 'Pre-Market', 'Cena_Kupna', 'Status EMA10', 'Radar Wyników', 'Stop Loss', 'Wzór', 'RSI 1h', 'RSI 1d', 'AVWAP', 'Sygnały']
+                st.dataframe(m[cols], use_container_width=True)
+                
+                if st.button("🚨 Wyślij raport portfela na Telegram"):
+                    msg = "*RAPORT PORTFELA (Cloud)*\n\n" + "\n".join(alerty) if alerty else "🛡️ Portfel w pełni bezpieczny."
+                    wyslij_telegram(msg)
+        else:
+            st.info("Twój portfel jest pusty. Dodaj akcje w panelu bocznym!")
 
     with t2:
         st.header(f"Master Screener ({len(res_df)} akcji)")
@@ -253,11 +288,9 @@ if all_tickers:
         skan_df = res_df[res_df['Sygnały'] != "Brak"] if tylko_syg else res_df
         st.dataframe(skan_df.sort_values(by="Wystrzał 5D", ascending=False), use_container_width=True)
 
-        with t3:
+    with t3:
         st.header("Interaktywne Wykresy (150 Dni)")
-        # Pancerne filtrowanie przed sortowaniem
-        czyste_do_wykresu = [str(t).upper() for t in all_tickers if t is not None and str(t).strip().lower() not in ['', 'none', 'qqq']]
-        wybrany = st.selectbox("Wybierz spółkę:", sorted(czyste_do_wykresu))
+        wybrany = st.selectbox("Wybierz spółkę:", sorted([t for t in all_tickers if t != 'QQQ']))
         if wybrany:
             chart_df = d1d[wybrany].dropna().tail(150)
             fig = go.Figure()
@@ -268,33 +301,22 @@ if all_tickers:
             st.plotly_chart(fig, use_container_width=True)
 
     with t4:
-        st.header("🧠 AI Dyrektor Finansowy (Agresywny Strateg)")
+        st.header("🧠 AI Dyrektor Finansowy")
         if gemini_api_key:
             genai.configure(api_key=gemini_api_key)
             try:
-                # Opcja z dostępem do Internetu (jeśli klucz pozwala)
-                model = genai.GenerativeModel('gemini-flash-latest', tools=[{"google_search_retrieval": {}}])
+                model = genai.GenerativeModel('gemini-1.5-flash-latest', tools=[{"google_search_retrieval": {}}])
             except:
-                # Fallback jeśli klucz ma zablokowane narzędzia
-                model = genai.GenerativeModel('gemini-flash-latest')
+                model = genai.GenerativeModel('gemini-1.5-flash-latest')
             
             c1, c2 = st.columns([1, 1])
             with c1:
-                st.subheader("Błyskawiczny Raport Ataku")
+                st.subheader("Błyskawiczny Raport")
                 if st.button("🤖 Generuj Agresywną Strategię"):
-                    with st.spinner("AI przetwarza rynek i czyta newsy..."):
-                        txt = m.to_string() if not m.empty else res_df.head(15).to_string()
-                        prompt = f"""
-                        Jesteś agresywnym, bezlitosnym Quants Swing Traderem. Szukasz rakiet (+15% w 14 dni), ale rygorystycznie tniesz straty na Stop Lossach.
-                        DANE: {txt}
-                        ZADANIE:
-                        1. Sprawdź mój portfel: Co natychmiast wyrzucić? (Patrz na EMA10, spadki RSI, przebicia AVWAP).
-                        2. Znajdź 1-2 rakiety z listy (RSI 1h wyprzedanie, mocny RVOL).
-                        3. Skorzystaj z sieci, by podać jedno kluczowe wydarzenie, które może wpłynąć na te akcje.
-                        Bądź krótki i w punkt.
-                        """
-                        try:
-                            st.info(model.generate_content(prompt).text)
+                    with st.spinner("Przetwarzam..."):
+                        txt = m.to_string() if 'm' in locals() and not m.empty else res_df.head(15).to_string()
+                        prompt = f"Jesteś agresywnym Swing Traderem. DANE: {txt}. Wskaż zyskowne akcje (RSI, RVOL) i podaj SL."
+                        try: st.info(model.generate_content(prompt).text)
                         except Exception as e: st.error(f"Błąd API: {e}")
             with c2:
                 st.subheader("💬 Live Chat")
@@ -308,7 +330,7 @@ if all_tickers:
                     with st.chat_message("assistant"):
                         with st.spinner("Myślę..."):
                             try:
-                                full_p = f"DANE RYNKU: {res_df.to_string(index=False)}\nPytanie: {query}\nJako agresywny AI Trader, odpowiedz krótko bazując na tych wskaźnikach i najnowszych newsach rynkowych."
+                                full_p = f"DANE RYNKU: {res_df.to_string(index=False)}\nPytanie: {query}"
                                 resp = model.generate_content(full_p).text
                                 st.markdown(resp)
                                 st.session_state.msgs.append({"role": "assistant", "content": resp})
