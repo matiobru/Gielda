@@ -300,7 +300,7 @@ if all_tickers:
             fig.update_layout(title=f'Analiza: {wybrany}', template='plotly_dark', height=600, xaxis_rangeslider_visible=False)
             st.plotly_chart(fig, use_container_width=True)
 
-        with t4:
+    with t4:
         st.header("🧠 AI Dyrektor Finansowy")
         if gemini_api_key:
             genai.configure(api_key=gemini_api_key)
@@ -334,3 +334,4 @@ if all_tickers:
                             except Exception as e: st.error(f"Błąd API: {e}")
         else:
             st.warning("⚠️ Wpisz API Key w bocznym panelu!")
+    
