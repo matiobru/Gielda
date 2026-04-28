@@ -300,11 +300,11 @@ if all_tickers:
             fig.update_layout(title=f'Analiza: {wybrany}', template='plotly_dark', height=600, xaxis_rangeslider_visible=False)
             st.plotly_chart(fig, use_container_width=True)
 
-    with t4:
+        with t4:
         st.header("🧠 AI Dyrektor Finansowy")
-                if gemini_api_key:
+        if gemini_api_key:
             genai.configure(api_key=gemini_api_key)
-            model = genai.GenerativeModel('gemini-flash-latest')
+            model = genai.GenerativeModel('gemini-1.5-flash')
             
             c1, c2 = st.columns([1, 1])
             with c1:
@@ -331,6 +331,6 @@ if all_tickers:
                                 resp = model.generate_content(full_p).text
                                 st.markdown(resp)
                                 st.session_state.msgs.append({"role": "assistant", "content": resp})
-                            except Exception as e: st.error(f"Błąd sieci: {e}")
+                            except Exception as e: st.error(f"Błąd API: {e}")
         else:
             st.warning("⚠️ Wpisz API Key w bocznym panelu!")
