@@ -304,7 +304,7 @@ if all_tickers:
         st.header("🧠 AI Dyrektor Finansowy")
                 if gemini_api_key:
             genai.configure(api_key=gemini_api_key)
-            model = genai.GenerativeModel('gemini-flash')
+            model = genai.GenerativeModel('gemini-flash-latest')
             
             c1, c2 = st.columns([1, 1])
             with c1:
