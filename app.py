@@ -305,9 +305,9 @@ if all_tickers:
         if gemini_api_key:
             genai.configure(api_key=gemini_api_key)
             try:
-                model = genai.GenerativeModel('gemini-1.5-flash-latest', tools=[{"google_search_retrieval": {}}])
+                model = genai.GenerativeModel('gemini-flash-latest', tools=[{"google_search_retrieval": {}}])
             except:
-                model = genai.GenerativeModel('gemini-1.5-flash-latest')
+                model = genai.GenerativeModel('gemini-flash-latest')
             
             c1, c2 = st.columns([1, 1])
             with c1:
